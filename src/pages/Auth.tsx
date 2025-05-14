@@ -104,12 +104,8 @@ const Auth = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-12 bg-gradient-to-b from-background via-background/95 to-background/90">
+    <div className="min-h-screen flex items-center justify-center px-4 py-12">
       <div className="relative w-full max-w-md">
-        {/* Background Effects */}
-        <div className="absolute -top-32 -left-32 w-64 h-64 bg-primary/20 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute -bottom-32 -right-32 w-64 h-64 bg-accent/20 rounded-full blur-3xl animate-pulse" />
-        
         {/* Content */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}

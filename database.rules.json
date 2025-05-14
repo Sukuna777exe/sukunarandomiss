@@ -1,0 +1,191 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+    
+    "users": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "$uid === auth.uid",
+        "profile": {
+          ".read": "auth != null",
+          ".write": "$uid === auth.uid",
+          "displayName": {
+            ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
+          },
+          "bio": {
+            ".validate": "newData.isString() && newData.val().length <= 200"
+          },
+          "avatarSeed": {
+            ".validate": "newData.isString() && newData.val().length <= 50"
+          }
+        },
+        "stats": {
+          ".read": "auth != null",
+          ".write": "$uid === auth.uid",
+          "level": {
+            ".validate": "newData.isNumber() && newData.val() >= 1"
+          },
+          "xp": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "totalCalls": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "totalMessages": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "uniqueConnections": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          }
+        },
+        "activities": {
+          "$activityId": {
+            ".validate": "newData.hasChildren(['type', 'timestamp'])",
+            "type": {
+              ".validate": "newData.isString() && (newData.val() === 'call' || newData.val() === 'message' || newData.val() === 'achievement')"
+            },
+            "timestamp": {
+              ".validate": "newData.isNumber() && newData.val() <= now"
+            },
+            "duration": {
+              ".validate": "!newData.exists() || (newData.isNumber() && newData.val() >= 0)"
+            },
+            "contact": {
+              ".validate": "!newData.exists() || newData.isString()"
+            },
+            "name": {
+              ".validate": "!newData.exists() || newData.isString()"
+            }
+          }
+        }
+      }
+    },
+
+    "status": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "$uid === auth.uid",
+        "online": {
+          ".validate": "newData.isBoolean()"
+        },
+        "lastSeen": {
+          ".validate": "newData.isNumber() && newData.val() <= now"
+        }
+      }
+    },
+    
+    "calls": {
+      "$callId": {
+        ".read": "auth != null",
+        ".write": "auth != null && (!data.exists() || data.child('createdBy').val() === auth.uid)",
+        ".validate": "newData.hasChildren(['status', 'createdBy', 'timestamp'])",
+        "status": {
+          ".validate": "newData.isString() && (newData.val() === 'waiting' || newData.val() === 'connected' || newData.val() === 'ended')"
+        },
+        "createdBy": {
+          ".validate": "newData.val() === auth.uid"
+        },
+        "timestamp": {
+          ".validate": "newData.isNumber() && newData.val() <= now"
+        },
+        "offer": {
+          ".validate": "!newData.exists() || (newData.hasChildren(['type', 'sdp']) && newData.child('type').isString())"
+        },
+        "answer": {
+          ".validate": "!newData.exists() || (newData.hasChildren(['type', 'sdp']) && newData.child('type').isString())"
+        },
+        "candidates": {
+          "$userId": {
+            ".validate": "newData.hasChildren(['candidate', 'sdpMid', 'sdpMLineIndex'])",
+            "candidate": {
+              ".validate": "newData.isString()"
+            },
+            "sdpMid": {
+              ".validate": "newData.isString()"
+            },
+            "sdpMLineIndex": {
+              ".validate": "newData.isNumber()"
+            }
+          }
+        }
+      }
+    },
+    
+    "privateChats": {
+      "$roomId": {
+        ".read": "auth != null && (data.child('participants').child(auth.uid).exists() || !data.exists())",
+        ".write": "auth != null",
+        "participants": {
+          "$uid": {
+            ".validate": "newData.isBoolean()"
+          }
+        },
+        "messages": {
+          "$messageId": {
+            ".validate": "newData.hasChildren(['text', 'senderId', 'senderName', 'timestamp'])",
+            "text": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 1000"
+            },
+            "senderId": {
+              ".validate": "newData.val() === auth.uid"
+            },
+            "senderName": {
+              ".validate": "newData.isString() && newData.val().length > 0"
+            },
+            "timestamp": {
+              ".validate": "newData.isNumber() && newData.val() <= now"
+            },
+            "type": {
+              ".validate": "!newData.exists() || (newData.isString() && (newData.val() === 'text' || newData.val() === 'image' || newData.val() === 'file'))"
+            },
+            "fileUrl": {
+              ".validate": "!newData.exists() || (newData.isString() && newData.val().matches(/^https:\\/\\/.*/))"
+            }
+          }
+        },
+        "lastMessage": {
+          ".validate": "!newData.exists() || newData.hasChildren(['text', 'timestamp'])"
+        }
+      }
+    },
+
+    "globalChat": {
+      "messages": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        "$messageId": {
+          ".validate": "newData.hasChildren(['text', 'senderId', 'senderName', 'timestamp'])",
+          "text": {
+            ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 1000"
+          },
+          "senderId": {
+            ".validate": "newData.val() === auth.uid"
+          },
+          "senderName": {
+            ".validate": "newData.isString() && newData.val().length > 0"
+          },
+          "timestamp": {
+            ".validate": "newData.isNumber() && newData.val() <= now"
+          },
+          "type": {
+            ".validate": "!newData.exists() || (newData.isString() && (newData.val() === 'text' || newData.val() === 'image' || newData.val() === 'file'))"
+          },
+          "fileUrl": {
+            ".validate": "!newData.exists() || (newData.isString() && newData.val().matches(/^https:\\/\\/.*/))"
+          }
+        }
+      },
+      "metadata": {
+        ".read": "auth != null",
+        ".write": false,
+        "lastMessageTime": {
+          ".validate": "newData.isNumber() && newData.val() <= now"
+        },
+        "messageCount": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        }
+      }
+    }
+  }
+}

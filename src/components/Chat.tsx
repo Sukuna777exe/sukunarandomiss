@@ -48,14 +48,14 @@ const Chat: React.FC<ChatProps> = ({ roomId, className }) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
         Object.entries(data).forEach(([key, value]: [string, any]) => {
-          fetchedMessages.push({
+        fetchedMessages.push({
             id: key,
             text: value.text,
             senderId: value.senderId,
             senderName: value.senderName || 'Anonymous',
             timestamp: value.timestamp,
-          });
         });
+      });
       }
       fetchedMessages.sort((a, b) => a.timestamp - b.timestamp);
       setMessages(fetchedMessages);
@@ -107,10 +107,21 @@ const Chat: React.FC<ChatProps> = ({ roomId, className }) => {
         timestamp: Date.now(),
       });
 
-      const userStatsRef = ref(rtdb, `users/${currentUser.uid}/stats/totalMessages`);
+      // Update user stats
+      const userStatsRef = ref(rtdb, `users/${currentUser.uid}/stats`);
       const snapshot = await get(userStatsRef);
-      const currentMessages = snapshot.exists() ? snapshot.val() : 0;
-      await set(userStatsRef, currentMessages + 1);
+      const currentStats = snapshot.exists() ? snapshot.val() : {
+        totalCalls: 0,
+        totalMessages: 0,
+        level: 1,
+        xp: 0,
+        uniqueConnections: 0
+      };
+      
+      await set(userStatsRef, {
+        ...currentStats,
+        totalMessages: (currentStats.totalMessages || 0) + 1
+      });
       
       setNewMessage('');
       
@@ -169,7 +180,7 @@ const Chat: React.FC<ChatProps> = ({ roomId, className }) => {
         }}
       >
         <AnimatePresence mode="popLayout">
-          {messages.length === 0 ? (
+        {messages.length === 0 ? (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -179,15 +190,15 @@ const Chat: React.FC<ChatProps> = ({ roomId, className }) => {
               <p className="text-sm">No messages yet</p>
               <p className="text-xs">Start the conversation!</p>
             </motion.div>
-          ) : (
+        ) : (
             messages.map((msg, index) => {
-              const isCurrentUser = msg.senderId === currentUser?.uid;
+            const isCurrentUser = msg.senderId === currentUser?.uid;
               const showSenderName = !isCurrentUser && 
                 (index === 0 || messages[index - 1].senderId !== msg.senderId);
-              
-              return (
+            
+            return (
                 <motion.div
-                  key={msg.id}
+                key={msg.id}
                   layout
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -217,7 +228,7 @@ const Chat: React.FC<ChatProps> = ({ roomId, className }) => {
                       <div className="font-medium text-[11px] mb-1 opacity-90">
                         {msg.senderName}
                       </div>
-                    )}
+                  )}
                     <p className="break-words leading-relaxed text-sm">{msg.text}</p>
                     <div className="text-[10px] opacity-70 text-right mt-1">
                       {formatMessageTime(msg.timestamp)}
@@ -228,12 +239,12 @@ const Chat: React.FC<ChatProps> = ({ roomId, className }) => {
                       <span className="text-[10px] font-medium text-primary-foreground">
                         {currentUser.displayName?.charAt(0).toUpperCase() || 'U'}
                       </span>
-                    </div>
+                </div>
                   )}
                 </motion.div>
-              );
-            })
-          )}
+            );
+          })
+        )}
         </AnimatePresence>
       </div>
       
@@ -309,7 +320,7 @@ const Chat: React.FC<ChatProps> = ({ roomId, className }) => {
             <Send className="h-4 w-4" />
           </Button>
         </form>
-      </div>
+        </div>
     </div>
   );
 };

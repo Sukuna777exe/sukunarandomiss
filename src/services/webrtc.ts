@@ -17,10 +17,13 @@ interface Room {
 export class WebRTCService {
   private peerConnection: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
+  private screenStream: MediaStream | null = null;
   private userId: string;
   private _roomId: string | null = null;
   private onRemoteStreamCallback: ((stream: MediaStream) => void) | null = null;
   private onConnectionStateChangeCallback: ((state: RTCPeerConnectionState) => void) | null = null;
+  private screenSender: RTCRtpSender | null = null;
+  private currentCamera: 'user' | 'environment' = 'user';
 
   constructor(userId: string) {
     this.userId = userId;
@@ -32,8 +35,13 @@ export class WebRTCService {
 
   async initialize(video: boolean = true, audio: boolean = true): Promise<MediaStream> {
     try {
+      // First check if there are multiple cameras
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(device => device.kind === 'videoinput');
+      
       this.localStream = await navigator.mediaDevices.getUserMedia({
         video: video ? {
+          facingMode: this.currentCamera,
           width: { ideal: 1280 },
           height: { ideal: 720 },
           frameRate: { ideal: 30 }
@@ -399,27 +407,58 @@ export class WebRTCService {
   
   private setupIceCandidateListener(roomId: string) {
     const candidatesRef = ref(rtdb, `rooms/${roomId}/candidates`);
+    const pendingCandidates: RTCIceCandidate[] = [];
+
     onValue(candidatesRef, async (snapshot) => {
       if (snapshot.exists()) {
         const candidates = snapshot.val() as { [key: string]: { [key: string]: RTCIceCandidateInit } };
+        
         for (const [uid, uidCandidates] of Object.entries(candidates)) {
           if (uid !== this.userId) {
             for (const candidate of Object.values(uidCandidates)) {
               try {
-                if (this.peerConnection!.remoteDescription) {
-                  console.log('Adding ICE candidate from peer');
-                  await this.peerConnection!.addIceCandidate(new RTCIceCandidate(candidate));
+                const iceCandidate = new RTCIceCandidate(candidate);
+                
+                if (this.peerConnection?.remoteDescription) {
+                  console.log('Adding ICE candidate:', {
+                    type: iceCandidate.type,
+                    protocol: iceCandidate.protocol,
+                    address: iceCandidate.address,
+                    port: iceCandidate.port
+                  });
+                  
+                  await this.peerConnection.addIceCandidate(iceCandidate);
                 } else {
-                  console.log('Skipping ICE candidate - no remote description yet');
+                  console.log('Queuing ICE candidate - no remote description yet');
+                  pendingCandidates.push(iceCandidate);
                 }
         } catch (error) {
-                console.error('Error adding ICE candidate:', error);
+                console.error('Error handling ICE candidate:', error);
               }
             }
           }
         }
       }
     });
+
+    // Add listener for remote description being set
+    const originalSetRemoteDescription = this.peerConnection!.setRemoteDescription.bind(this.peerConnection);
+    this.peerConnection!.setRemoteDescription = async (description: RTCSessionDescriptionInit) => {
+      await originalSetRemoteDescription(description);
+      
+      // Process any pending candidates
+      if (pendingCandidates.length > 0) {
+        console.log(`Processing ${pendingCandidates.length} pending ICE candidates`);
+        for (const candidate of pendingCandidates) {
+          try {
+            await this.peerConnection!.addIceCandidate(candidate);
+          } catch (error) {
+            console.error('Error adding pending ICE candidate:', error);
+          }
+        }
+        pendingCandidates.length = 0; // Clear the array
+      }
+    };
   }
   
   private handleConnectionTimeout() {
@@ -449,12 +488,37 @@ export class WebRTCService {
         ]);
         
         // Update user stats
-        const userStatsRef = ref(rtdb, `users/${this.userId}/stats/totalCalls`);
+        const userStatsRef = ref(rtdb, `users/${this.userId}/stats`);
         const snapshot = await get(userStatsRef);
-        const currentCalls = snapshot.exists() ? snapshot.val() : 0;
-        await set(userStatsRef, currentCalls + 1);
+        const currentStats = snapshot.exists() ? snapshot.val() : {
+          totalCalls: 0,
+          totalMessages: 0,
+          level: 1,
+          xp: 0,
+          uniqueConnections: 0
+        };
+
+        // Calculate new XP and level
+        const newXP = currentStats.xp + 10; // Add 10 XP per call
+        const newLevel = Math.floor(1 + Math.sqrt(newXP / 100)); // Simple level calculation
+        
+        await set(userStatsRef, {
+          ...currentStats,
+          totalCalls: (currentStats.totalCalls || 0) + 1,
+          xp: newXP,
+          level: newLevel
+        });
+
+        // Log activity
+        const activityRef = ref(rtdb, `users/${this.userId}/activities`);
+        const newActivityRef = push(activityRef);
+        await set(newActivityRef, {
+          type: 'call',
+          timestamp: Date.now()
+        });
+
       } catch (error) {
-        console.error('Error cleaning up room:', error);
+        console.error('Error cleaning up room and updating stats:', error);
       }
     }
 
@@ -466,7 +530,7 @@ export class WebRTCService {
 
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => track.stop());
-    this.localStream = null;
+      this.localStream = null;
     }
 
     // Remove listeners
@@ -474,7 +538,7 @@ export class WebRTCService {
       off(ref(rtdb, `rooms/${this._roomId}`));
       off(ref(rtdb, `chats/${this._roomId}`));
       this._roomId = null;
-  }
+    }
   }
 
   toggleAudio(enabled: boolean) {
@@ -545,52 +609,80 @@ export class WebRTCService {
 
   private startConnectionCheck() {
     console.log('Starting connection check...');
+    let connectionAttempts = 0;
+    const maxAttempts = 3;
+
     const checkInterval = setInterval(() => {
       if (!this.peerConnection || !this._roomId) {
+        console.log('No peer connection or room ID, clearing interval');
         clearInterval(checkInterval);
         return;
       }
 
       const state = this.peerConnection.connectionState;
-      console.log('Connection check - State:', state);
+      const iceState = this.peerConnection.iceConnectionState;
+      const signalingState = this.peerConnection.signalingState;
+      
+      console.log('Connection check:', {
+        connectionState: state,
+        iceConnectionState: iceState,
+        signalingState: signalingState,
+        attempt: connectionAttempts + 1
+      });
 
       if (state === 'connected') {
         console.log('Connection established successfully');
-        // Mark room as unavailable once connected
         set(ref(rtdb, `rooms/${this._roomId}/available`), false);
         clearInterval(checkInterval);
       } else if (state === 'failed' || state === 'closed') {
-        console.log('Connection check failed, attempting recovery...');
+        console.log('Connection failed or closed, attempting recovery...');
         this.handleConnectionError();
         clearInterval(checkInterval);
       } else if (state === 'connecting') {
-        // Check if the room still exists and is valid
+        connectionAttempts++;
+        
+        // Check room state
         get(ref(rtdb, `rooms/${this._roomId}`)).then((snapshot) => {
           if (!snapshot.exists()) {
-            console.log('Room no longer exists, cleaning up...');
+            console.log('Room no longer exists during connection attempt');
             this.handleConnectionError();
             clearInterval(checkInterval);
-          } else {
+            return;
+          }
+
             const room = snapshot.val() as Room;
-            const isStale = Date.now() - room.createdAt > 30000;
-            if (isStale) {
-              console.log('Connection taking too long, cleaning up...');
+          console.log('Room state during connection:', {
+            hasOffer: !!room.offer,
+            hasAnswer: !!room.answer,
+            available: room.available,
+            age: Date.now() - room.createdAt
+          });
+
+          // If we've tried too many times or the connection is taking too long
+          if (connectionAttempts >= maxAttempts || Date.now() - room.createdAt > 20000) {
+            console.log('Connection taking too long or too many attempts', {
+              attempts: connectionAttempts,
+              maxAttempts,
+              age: Date.now() - room.createdAt
+            });
               this.handleConnectionTimeout();
               clearInterval(checkInterval);
-            }
+          } else if (iceState === 'failed') {
+            console.log('ICE connection failed, attempting restart');
+            this.peerConnection?.restartIce();
           }
         });
       }
-    }, 2000); // Check more frequently - every 2 seconds
+    }, 2000);
 
-    // Clear interval after 30 seconds if still not connected
+    // Clear interval after 20 seconds if still not connected
     setTimeout(() => {
-      clearInterval(checkInterval);
       if (this.peerConnection?.connectionState === 'connecting') {
-        console.log('Connection timeout after 30 seconds');
+        console.log('Connection timeout after 20 seconds');
         this.handleConnectionTimeout();
       }
-    }, 30000);
+      clearInterval(checkInterval);
+    }, 20000);
   }
 
   private monitorRoomActivity() {
@@ -632,25 +724,281 @@ export class WebRTCService {
       
       if (snapshot.exists()) {
         const rooms = snapshot.val() as { [key: string]: Room };
-        const staleThreshold = Date.now() - 30000; // 30 seconds threshold
+        const staleThreshold = Date.now() - 15000; // Reduced to 15 seconds threshold
         
         for (const [roomId, room] of Object.entries(rooms)) {
-          // A room is stale if:
-          // 1. It hasn't been active recently
-          // 2. It's available but old
-          // 3. It has no offer/answer but is marked unavailable
+          // A room is stale if any of these conditions are met:
           if (
-            (room.lastActive && room.lastActive < staleThreshold) ||
-            (room.available && room.createdAt < staleThreshold) ||
-            (!room.available && !room.offer && !room.answer && room.createdAt < staleThreshold)
+            (room.lastActive && room.lastActive < staleThreshold) || // No activity
+            (room.available && room.createdAt < staleThreshold) || // Old available room
+            (!room.offer && room.createdAt < staleThreshold) || // No offer after creation
+            (!room.answer && room.offer && Date.now() - room.createdAt > 20000) || // No answer after offer
+            (!room.available && !room.offer && !room.answer) // Invalid state
           ) {
-            console.log('Cleaning up stale room:', roomId);
+            console.log('Cleaning up stale room:', roomId, {
+              reason: 'Room is stale',
+              lastActive: room.lastActive,
+              createdAt: room.createdAt,
+              hasOffer: !!room.offer,
+              hasAnswer: !!room.answer,
+              available: room.available
+            });
             await remove(ref(rtdb, `rooms/${roomId}`));
           }
         }
       }
     } catch (error) {
       console.error('Error cleaning up stale rooms:', error);
+    }
+  }
+
+  async startScreenShare(): Promise<boolean> {
+    try {
+      if (!this.peerConnection) {
+        console.error('No peer connection available');
+        return false;
+      }
+
+      // Get screen sharing stream with audio capture option
+      this.screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30 }
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true
+        }
+      });
+
+      // Store original video track for later
+      const originalVideoTrack = this.localStream?.getVideoTracks()[0];
+
+      // Handle stream ending (user stops sharing)
+      this.screenStream.getVideoTracks()[0].addEventListener('ended', () => {
+        console.log('Screen sharing stopped by user');
+        if (originalVideoTrack) {
+        this.stopScreenShare();
+        }
+      });
+
+      // Find the video sender
+      const videoSender = this.peerConnection.getSenders().find(sender => 
+        sender.track?.kind === 'video'
+      );
+
+      if (videoSender) {
+        // Replace the camera track with screen sharing track
+        const screenTrack = this.screenStream.getVideoTracks()[0];
+        console.log('Replacing video track with screen share:', {
+          trackId: screenTrack.id,
+          trackLabel: screenTrack.label,
+          trackEnabled: screenTrack.enabled
+        });
+
+        this.screenSender = videoSender;
+        await videoSender.replaceTrack(screenTrack);
+
+        // If there's system audio, add it to the peer connection
+        const audioTrack = this.screenStream.getAudioTracks()[0];
+        if (audioTrack) {
+          console.log('Adding system audio track:', {
+            trackId: audioTrack.id,
+            trackLabel: audioTrack.label
+          });
+          this.peerConnection.addTrack(audioTrack, this.screenStream);
+        }
+
+        // Trigger renegotiation if needed
+        if (this.peerConnection.signalingState === 'stable') {
+          const offer = await this.peerConnection.createOffer();
+          await this.peerConnection.setLocalDescription(offer);
+          
+          if (this._roomId) {
+            await set(ref(rtdb, `rooms/${this._roomId}/offer`), {
+              type: offer.type,
+              sdp: offer.sdp
+            });
+          }
+        }
+
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('Error starting screen share:', error);
+      // Clean up if there was an error
+      if (this.screenStream) {
+        this.screenStream.getTracks().forEach(track => track.stop());
+        this.screenStream = null;
+      }
+      return false;
+    }
+  }
+
+  async stopScreenShare(): Promise<void> {
+    try {
+      if (this.screenStream) {
+        console.log('Stopping screen share...');
+        
+        // Stop all tracks in the screen sharing stream
+        this.screenStream.getTracks().forEach(track => {
+          console.log('Stopping track:', {
+            trackId: track.id,
+            trackKind: track.kind,
+            trackLabel: track.label
+          });
+          track.stop();
+        });
+        this.screenStream = null;
+
+        // Replace screen sharing track with original camera track
+        if (this.screenSender && this.localStream) {
+      const videoTrack = this.localStream.getVideoTracks()[0];
+      if (videoTrack) {
+            console.log('Restoring camera track:', {
+              trackId: videoTrack.id,
+              trackLabel: videoTrack.label,
+              trackEnabled: videoTrack.enabled
+            });
+            await this.screenSender.replaceTrack(videoTrack);
+
+            // Trigger renegotiation if needed
+            if (this.peerConnection?.signalingState === 'stable') {
+              const offer = await this.peerConnection.createOffer();
+              await this.peerConnection.setLocalDescription(offer);
+              
+              if (this._roomId) {
+                await set(ref(rtdb, `rooms/${this._roomId}/offer`), {
+                  type: offer.type,
+                  sdp: offer.sdp
+                });
+              }
+            }
+          }
+        }
+
+        // Remove any system audio tracks from the peer connection
+        if (this.peerConnection) {
+          const senders = this.peerConnection.getSenders();
+          for (const sender of senders) {
+            if (sender.track?.kind === 'audio' && sender.track !== this.localStream?.getAudioTracks()[0]) {
+              console.log('Removing system audio track');
+              this.peerConnection.removeTrack(sender);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error stopping screen share:', error);
+      throw error;
+    }
+  }
+
+  async switchCamera(): Promise<boolean> {
+    try {
+      if (!this.peerConnection || !this.localStream) {
+        console.error('No peer connection or local stream available');
+        return false;
+      }
+
+      // First check if there are multiple cameras
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(device => device.kind === 'videoinput');
+
+      if (videoDevices.length < 2) {
+        console.log('Only one camera available');
+        return false;
+      }
+
+      // Toggle between front and back cameras
+      this.currentCamera = this.currentCamera === 'user' ? 'environment' : 'user';
+
+      // Stop all tracks before getting new stream
+      this.localStream.getVideoTracks().forEach(track => track.stop());
+
+      // Get new stream with the other camera
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { exact: this.currentCamera },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        },
+        audio: true
+      });
+
+      // Find the video sender
+      const videoSender = this.peerConnection.getSenders().find(sender => 
+        sender.track?.kind === 'video'
+      );
+
+      if (videoSender) {
+        // Get the new video track
+        const newVideoTrack = newStream.getVideoTracks()[0];
+        
+        if (!newVideoTrack) {
+          throw new Error('No video track in new stream');
+        }
+
+        // Replace the current video track with the new camera track
+        await videoSender.replaceTrack(newVideoTrack);
+
+        // Update local stream's video track
+        const oldTrack = this.localStream.getVideoTracks()[0];
+        if (oldTrack) {
+          this.localStream.removeTrack(oldTrack);
+        }
+        this.localStream.addTrack(newVideoTrack);
+
+        // Keep the audio track from the original stream
+        const audioTrack = this.localStream.getAudioTracks()[0];
+        if (audioTrack) {
+          newStream.addTrack(audioTrack);
+        }
+
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('Error switching camera:', error);
+      // If exact facingMode fails, try without exact constraint
+      try {
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: this.currentCamera,
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 }
+          },
+          audio: true
+        });
+
+        const videoSender = this.peerConnection?.getSenders().find(sender => 
+          sender.track?.kind === 'video'
+        );
+
+        if (videoSender && this.localStream) {
+          const newVideoTrack = newStream.getVideoTracks()[0];
+          await videoSender.replaceTrack(newVideoTrack);
+
+          // Update local stream's video track
+          const oldTrack = this.localStream.getVideoTracks()[0];
+          if (oldTrack) {
+            oldTrack.stop();
+            this.localStream.removeTrack(oldTrack);
+          }
+          this.localStream.addTrack(newVideoTrack);
+
+          return true;
+        }
+      } catch (retryError) {
+        console.error('Error in camera switch retry:', retryError);
+      }
+      return false;
     }
   }
 }
