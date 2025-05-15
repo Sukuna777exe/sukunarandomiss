@@ -1,25 +1,16 @@
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { signIn, signUp } from '../services/firebase';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useToast } from '@/components/ui/use-toast';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
+import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import { Shield, Lock, Mail, User, Eye, EyeOff, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
-
-// List of allowed email domains
-const ALLOWED_EMAIL_DOMAINS = [
-  'gmail.com',
-  'yahoo.com',
-  'outlook.com',
-  'hotmail.com',
-  'proton.me',
-  'icloud.com'
-];
+import { Shield, Lock, Mail, User, Eye, EyeOff, AlertCircle } from 'lucide-react';
 
 const Auth = () => {
   const [email, setEmail] = useState('');
@@ -28,26 +19,10 @@ const Auth = () => {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [passwordStrength, setPasswordStrength] = useState(0);
-  const [emailError, setEmailError] = useState('');
   const navigate = useNavigate();
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const defaultTab = searchParams.get('tab') || 'login';
-
-  const validateEmail = (email: string) => {
-    if (!email) return false;
-    const domain = email.split('@')[1];
-    if (!domain) {
-      setEmailError('Please enter a valid email address');
-      return false;
-    }
-    if (!ALLOWED_EMAIL_DOMAINS.includes(domain)) {
-      setEmailError('This email domain is not allowed. Please use a common email provider.');
-      return false;
-    }
-    setEmailError('');
-    return true;
-  };
 
   const checkPasswordStrength = (pass: string) => {
     let strength = 0;
@@ -70,21 +45,12 @@ const Auth = () => {
       return;
     }
 
-    if (!validateEmail(email)) {
-      toast({
-        title: "Invalid Email",
-        description: emailError,
-        variant: "destructive",
-      });
-      return;
-    }
-
     setLoading(true);
     try {
       await signIn(email, password);
       toast({
-        title: "Welcome Back! 👋",
-        description: "You've been logged in successfully.",
+        title: "Authentication Successful",
+        description: "Welcome back! You've been logged in successfully.",
       });
       navigate('/dashboard');
     } catch (error: any) {
@@ -110,15 +76,6 @@ const Auth = () => {
       return;
     }
 
-    if (!validateEmail(email)) {
-      toast({
-        title: "Invalid Email",
-        description: emailError,
-        variant: "destructive",
-      });
-      return;
-    }
-
     if (passwordStrength < 3) {
       toast({
         title: "Weak Password",
@@ -132,8 +89,8 @@ const Auth = () => {
     try {
       await signUp(email, password, displayName);
       toast({
-        title: "Welcome to Randomiss! 🎉",
-        description: "Your account has been created successfully. Let's get started!",
+        title: "Registration Successful",
+        description: "Your account has been created successfully. Welcome to Randomiss!",
       });
       navigate('/dashboard');
     } catch (error: any) {
@@ -149,13 +106,11 @@ const Auth = () => {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background/50 to-background p-4">
-      {/* Enhanced Background Effects */}
-      <div className="fixed top-0 left-0 w-full h-full overflow-hidden">
+      {/* Background Effects */}
+      <div className="fixed top-0 left-0 w-full h-full">
         <div className="absolute -top-32 -left-32 w-96 h-96 bg-primary/10 rounded-full blur-3xl animate-pulse" />
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-accent/10 rounded-full blur-3xl animate-pulse" />
         <div className="absolute -bottom-32 -right-32 w-96 h-96 bg-primary/10 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute top-1/4 right-1/4 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-1/4 left-1/4 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl animate-pulse" />
       </div>
 
       {/* Content */}
@@ -165,22 +120,10 @@ const Auth = () => {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
           className="w-full text-center mb-8"
-        >
-          <motion.div 
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ type: "spring", duration: 0.6 }}
-            className="inline-flex items-center justify-center mb-4"
-          >
-            <div className="relative">
-              <Shield className="w-16 h-16 text-primary animate-pulse" />
-              <motion.div
-                animate={{ rotate: 360 }}
-                transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-                className="absolute inset-0 rounded-full border-2 border-primary/20"
-              />
-            </div>
-          </motion.div>
+      >
+          <div className="inline-flex items-center justify-center mb-4">
+            <Shield className="w-12 h-12 text-primary" />
+          </div>
         <h1 className="text-4xl font-bold bg-gradient-to-r from-primary via-accent to-primary bg-clip-text text-transparent">
           Welcome to Randomiss
         </h1>
@@ -198,12 +141,12 @@ const Auth = () => {
             <CardHeader className="space-y-1">
               <CardTitle className="text-2xl font-bold flex items-center justify-center gap-2">
                 <Lock className="w-5 h-5 text-primary" />
-                {defaultTab === 'login' ? 'Welcome Back' : 'Join Randomiss'}
+                {defaultTab === 'login' ? 'Secure Sign In' : 'Create Account'}
               </CardTitle>
               <CardDescription>
                 {defaultTab === 'login' 
-                  ? 'Sign in securely to your account'
-                  : 'Create your secure account today'
+                  ? 'Access your account securely'
+                  : 'Join our secure platform today'
                 }
               </CardDescription>
             </CardHeader>
@@ -226,43 +169,12 @@ const Auth = () => {
                           type="email"
                           placeholder="Enter your email address"
                           value={email}
-                          onChange={(e) => {
-                            setEmail(e.target.value);
-                            validateEmail(e.target.value);
-                          }}
+                          onChange={(e) => setEmail(e.target.value)}
                           required
-                          className={cn(
-                            "bg-white/5 border-white/10 focus:border-primary/50 pl-10 pr-10",
-                            emailError && "border-destructive"
-                          )}
+                          className="bg-white/5 border-white/10 focus:border-primary/50 pl-10"
                         />
                         <Mail className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
-                        <AnimatePresence>
-                          {email && (
-                            <motion.div
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              exit={{ opacity: 0 }}
-                              className="absolute right-3 top-3"
-                            >
-                              {emailError ? (
-                                <XCircle className="w-4 h-4 text-destructive" />
-                              ) : (
-                                <CheckCircle2 className="w-4 h-4 text-green-500" />
-                              )}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
                       </div>
-                      {emailError && (
-                        <motion.p
-                          initial={{ opacity: 0, y: -10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className="text-xs text-destructive mt-1"
-                        >
-                          {emailError}
-                        </motion.p>
-                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="password" className="flex items-center gap-2">
@@ -335,43 +247,12 @@ const Auth = () => {
                           type="email"
                           placeholder="Enter your email address"
                           value={email}
-                          onChange={(e) => {
-                            setEmail(e.target.value);
-                            validateEmail(e.target.value);
-                          }}
+                          onChange={(e) => setEmail(e.target.value)}
                           required
-                          className={cn(
-                            "bg-white/5 border-white/10 focus:border-primary/50 pl-10 pr-10",
-                            emailError && "border-destructive"
-                          )}
+                          className="bg-white/5 border-white/10 focus:border-primary/50 pl-10"
                         />
                         <Mail className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
-                        <AnimatePresence>
-                          {email && (
-                            <motion.div
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              exit={{ opacity: 0 }}
-                              className="absolute right-3 top-3"
-                            >
-                              {emailError ? (
-                                <XCircle className="w-4 h-4 text-destructive" />
-                              ) : (
-                                <CheckCircle2 className="w-4 h-4 text-green-500" />
-                              )}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
                       </div>
-                      {emailError && (
-                        <motion.p
-                          initial={{ opacity: 0, y: -10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className="text-xs text-destructive mt-1"
-                        >
-                          {emailError}
-                        </motion.p>
-                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="password" className="flex items-center gap-2">
@@ -399,15 +280,12 @@ const Auth = () => {
                           {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
-                      {/* Enhanced Password strength indicator */}
+                      {/* Password strength indicator */}
                       <div className="space-y-2">
                         <div className="flex gap-1">
                           {[...Array(4)].map((_, i) => (
-                            <motion.div
+                            <div
                               key={i}
-                              initial={{ scaleX: 0 }}
-                              animate={{ scaleX: 1 }}
-                              transition={{ duration: 0.2, delay: i * 0.1 }}
                               className={cn(
                                 "h-1 w-full rounded-full transition-all duration-300",
                                 i < passwordStrength
@@ -444,6 +322,17 @@ const Auth = () => {
                   </form>
                 </TabsContent>
               </Tabs>
+
+              <div className="relative my-4">
+                <div className="absolute inset-0 flex items-center">
+                  <Separator className="w-full" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-background px-2 text-muted-foreground">
+                    Or continue with
+                  </span>
+                </div>
+              </div>
             </CardContent>
           </Card>
       </motion.div>
