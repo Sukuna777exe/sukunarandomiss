@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g>
+    <!-- Main pin shape -->
+    <path d="M256 48C176.7 48 112 112.7 112 192c0 128 144 280 144 280s144-152 144-280c0-79.3-64.7-144-144-144z" fill="#FF0000"/>
+    <!-- Heart shape -->
+    <path d="M256 96c35.3 0 64 28.7 64 64 0 35.3-28.7 64-64 64s-64-28.7-64-64c0-35.3 28.7-64 64-64z" fill="#FFFFFF"/>
+  </g>
+</svg> 
