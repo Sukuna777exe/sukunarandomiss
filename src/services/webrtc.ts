@@ -1,5 +1,6 @@
 import { rtdb } from './firebase';
 import { ref, set, onValue, off, remove, get, push } from 'firebase/database';
+import { isAdminUser } from '@/lib/utils';
 
 interface Room {
   id?: string;
@@ -12,6 +13,27 @@ interface Room {
   candidates?: {
     [key: string]: RTCIceCandidateInit[];
   };
+  participants?: {
+    [key: string]: boolean;
+  };
+}
+
+interface RemoteUserInfo {
+  profile?: {
+    displayName: string;
+    bio: string;
+    avatarSeed: string;
+  };
+  stats?: {
+    level: number;
+    xp: number;
+    totalCalls: number;
+    totalMessages: number;
+  };
+  roles?: {
+    admin?: boolean;
+    dev?: boolean;
+  };
 }
 
 export class WebRTCService {
@@ -19,14 +41,23 @@ export class WebRTCService {
   private localStream: MediaStream | null = null;
   private screenStream: MediaStream | null = null;
   private userId: string;
+  private remoteUserId: string | null = null;
   private _roomId: string | null = null;
-  private onRemoteStreamCallback: ((stream: MediaStream) => void) | null = null;
+  private onRemoteStreamCallback: ((stream: MediaStream, userId: string) => void) | null = null;
   private onConnectionStateChangeCallback: ((state: RTCPeerConnectionState) => void) | null = null;
+  private onRemoteUserInfoCallback: ((info: RemoteUserInfo) => void) | null = null;
   private screenSender: RTCRtpSender | null = null;
   private currentCamera: 'user' | 'environment' = 'user';
 
   constructor(userId: string) {
     this.userId = userId;
+    this._roomId = null;
+    this.localStream = null;
+    this.peerConnection = null;
+    this.remoteUserId = null;
+    this.onRemoteStreamCallback = null;
+    this.onConnectionStateChangeCallback = null;
+    this.onRemoteUserInfoCallback = null;
   }
 
   get roomId(): string | null {
@@ -50,11 +81,13 @@ export class WebRTCService {
       });
 
       const configuration: RTCConfiguration = {
-      iceServers: [
+        iceServers: [
           { 
             urls: [
               'stun:stun1.l.google.com:19302',
-              'stun:stun2.l.google.com:19302'
+              'stun:stun2.l.google.com:19302',
+              'stun:stun3.l.google.com:19302',
+              'stun:stun4.l.google.com:19302'
             ]
           },
           {
@@ -65,15 +98,24 @@ export class WebRTCService {
             ],
             username: 'openrelayproject',
             credential: 'openrelayproject'
+          },
+          {
+            urls: [
+              'turn:relay.metered.ca:80',
+              'turn:relay.metered.ca:443',
+              'turn:relay.metered.ca:443?transport=tcp'
+            ],
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
           }
         ],
         iceCandidatePoolSize: 15,
         bundlePolicy: 'max-bundle',
         rtcpMuxPolicy: 'require',
         iceTransportPolicy: 'all'
-    };
+      };
 
-    this.peerConnection = new RTCPeerConnection(configuration);
+      this.peerConnection = new RTCPeerConnection(configuration);
 
       // Add connection state monitoring
       this.peerConnection.onconnectionstatechange = () => {
@@ -195,7 +237,7 @@ export class WebRTCService {
             track.enabled = true;
           });
           
-          this.onRemoteStreamCallback(remoteStream);
+          this.onRemoteStreamCallback(remoteStream, this.remoteUserId || '');
         }
       };
 
@@ -245,21 +287,252 @@ export class WebRTCService {
   private async recreatePeerConnection() {
     console.log('Attempting to recreate peer connection...');
     try {
+      // Store current tracks before closing
+      const currentTracks = this.localStream?.getTracks() || [];
+      
       // Close existing connection
       if (this.peerConnection) {
         this.peerConnection.close();
       }
 
-      // Reinitialize with the same stream
-      await this.initialize(true, true);
+      // Create new peer connection with same configuration
+      const configuration: RTCConfiguration = {
+        iceServers: [
+          { 
+            urls: [
+              'stun:stun1.l.google.com:19302',
+              'stun:stun2.l.google.com:19302',
+              'stun:stun3.l.google.com:19302',
+              'stun:stun4.l.google.com:19302'
+            ]
+          },
+          {
+            urls: [
+              'turn:openrelay.metered.ca:80',
+              'turn:openrelay.metered.ca:443',
+              'turn:openrelay.metered.ca:443?transport=tcp'
+            ],
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: [
+              'turn:relay.metered.ca:80',
+              'turn:relay.metered.ca:443',
+              'turn:relay.metered.ca:443?transport=tcp'
+            ],
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
+        ],
+        iceCandidatePoolSize: 15,
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require',
+        iceTransportPolicy: 'all'
+      };
+
+      this.peerConnection = new RTCPeerConnection(configuration);
+
+      // Re-add all event listeners
+      this.setupPeerConnectionListeners();
+
+      // Re-add existing tracks
+      currentTracks.forEach(track => {
+        if (this.peerConnection && this.localStream) {
+          console.log('Re-adding track to peer connection:', track.kind, track.id);
+          this.peerConnection.addTrack(track, this.localStream);
+        }
+      });
 
       // Rejoin the room if we were in one
       if (this._roomId) {
-        await this.joinRandomRoom();
+        console.log('Attempting to rejoin room:', this._roomId);
+        const roomRef = ref(rtdb, `rooms/${this._roomId}`);
+        const snapshot = await get(roomRef);
+        
+        if (snapshot.exists()) {
+          const room = snapshot.val() as Room;
+          // Only rejoin if the room is still valid
+          if (room.available || room.createdBy === this.userId) {
+            await this.joinRandomRoom();
+          } else {
+            console.log('Room is no longer available, creating new room');
+            this._roomId = null;
+            await this.joinRandomRoom();
+          }
+        } else {
+          console.log('Room no longer exists, creating new room');
+          this._roomId = null;
+          await this.joinRandomRoom();
+        }
       }
     } catch (error) {
       console.error('Error recreating peer connection:', error);
+      // If recreation fails, try one more time after a delay
+      setTimeout(() => {
+        if (!this.peerConnection || this.peerConnection.connectionState === 'failed') {
+          console.log('Attempting one final connection recreation');
+          this.initialize(true, true)
+            .then(() => this.joinRandomRoom())
+            .catch(e => console.error('Final recreation attempt failed:', e));
+        }
+      }, 2000);
+    }
+  }
+
+  private setupPeerConnectionListeners() {
+    if (!this.peerConnection) return;
+
+    this.peerConnection.onconnectionstatechange = () => {
+      const state = this.peerConnection?.connectionState;
+      console.log('Connection state changed:', state);
+      
+      switch (state) {
+        case 'connecting':
+          console.log('Connection establishing...');
+          break;
+        case 'connected':
+          console.log('Connection established successfully');
+          if (this._roomId) {
+            set(ref(rtdb, `rooms/${this._roomId}/available`), false);
+            set(ref(rtdb, `rooms/${this._roomId}/lastActive`), Date.now());
+          }
+          if (this.onConnectionStateChangeCallback) {
+            this.onConnectionStateChangeCallback('connected');
+          }
+          break;
+        case 'disconnected':
+          console.log('Connection lost, attempting to reconnect...');
+          if (this.peerConnection?.iceConnectionState !== 'failed') {
+            this.peerConnection?.restartIce();
+          }
+          if (this.onConnectionStateChangeCallback) {
+            this.onConnectionStateChangeCallback('disconnected');
+          }
+          // Try to reconnect after a short delay
+          setTimeout(() => {
+            if (this.peerConnection?.connectionState === 'disconnected') {
+              this.recreatePeerConnection();
+            }
+          }, 2000);
+          break;
+        case 'failed':
+          console.log('Connection failed permanently');
+          if (this.onConnectionStateChangeCallback) {
+            this.onConnectionStateChangeCallback('failed');
+          }
+          this.handleConnectionError();
+          break;
+        case 'closed':
+          console.log('Connection closed');
+          if (this.onConnectionStateChangeCallback) {
+            this.onConnectionStateChangeCallback('closed');
+          }
+          break;
       }
+    };
+
+    this.peerConnection.oniceconnectionstatechange = () => {
+      const state = this.peerConnection?.iceConnectionState;
+      console.log('ICE connection state changed:', state);
+      
+      switch (state) {
+        case 'checking':
+          console.log('Checking ICE connection...');
+          break;
+        case 'connected':
+          console.log('ICE connection established');
+          break;
+        case 'completed':
+          console.log('ICE connection completed');
+          break;
+        case 'failed':
+          console.log('ICE connection failed, attempting to restart ICE');
+          this.peerConnection?.restartIce();
+          // If ICE restart doesn't work, recreate the connection
+          setTimeout(() => {
+            if (this.peerConnection?.iceConnectionState === 'failed') {
+              this.recreatePeerConnection();
+            }
+          }, 2000);
+          break;
+        case 'disconnected':
+          console.log('ICE connection disconnected, attempting to recover...');
+          this.peerConnection?.restartIce();
+          // Try to recover the connection
+          setTimeout(() => {
+            if (this.peerConnection?.iceConnectionState === 'disconnected') {
+              this.recreatePeerConnection();
+            }
+          }, 2000);
+          break;
+      }
+    };
+
+    // Handle remote tracks
+    this.peerConnection.ontrack = (event) => {
+      console.log('Received remote track:', event.track.kind, event.track.id);
+      
+      // Ensure the track is enabled
+      event.track.enabled = true;
+      
+      if (this.onRemoteStreamCallback && event.streams && event.streams[0]) {
+        const remoteStream = event.streams[0];
+        console.log('Remote stream received:', {
+          id: remoteStream.id,
+          active: remoteStream.active,
+          tracks: remoteStream.getTracks().map(t => ({
+            kind: t.kind,
+            enabled: t.enabled,
+            muted: t.muted,
+            readyState: t.readyState
+          }))
+        });
+        
+        // Ensure all tracks are enabled
+        remoteStream.getTracks().forEach(track => {
+          track.enabled = true;
+        });
+        
+        this.onRemoteStreamCallback(remoteStream, this.remoteUserId || '');
+      }
+    };
+
+    // Handle ICE candidates
+    this.peerConnection.onicecandidate = (event) => {
+      if (event.candidate && this._roomId) {
+        console.log('New ICE candidate:', event.candidate.type, event.candidate.protocol);
+        const candidateRef = ref(rtdb, `rooms/${this._roomId}/candidates/${this.userId}`);
+        push(candidateRef, event.candidate.toJSON());
+      } else if (!event.candidate) {
+        console.log('ICE gathering completed');
+      }
+    };
+
+    // Handle negotiation
+    this.peerConnection.onnegotiationneeded = async () => {
+      try {
+        if (this._roomId && this.peerConnection?.signalingState === 'stable') {
+          console.log('Negotiation needed, creating new offer');
+          const offer = await this.peerConnection.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true,
+            iceRestart: true
+          });
+          
+          await this.peerConnection.setLocalDescription(offer);
+          console.log('Local description set:', offer.type);
+          
+          await set(ref(rtdb, `rooms/${this._roomId}/offer`), {
+            type: offer.type,
+            sdp: offer.sdp
+          });
+        }
+      } catch (error) {
+        console.error('Error during negotiation:', error);
+        this.handleConnectionError();
+      }
+    };
   }
 
   async joinRandomRoom() {
@@ -338,9 +611,122 @@ export class WebRTCService {
   private async joinRoom(roomId: string) {
     console.log('Joining room:', roomId);
     try {
+      // Get remote user ID from room data
+      const roomRef = ref(rtdb, `rooms/${roomId}`);
+      const roomSnapshot = await get(roomRef);
+      if (roomSnapshot.exists()) {
+        const roomData = roomSnapshot.val();
+        console.log('Room data:', roomData);
+        
+        // The other user in the room is the remote user
+        const remoteId = Object.keys(roomData.participants || {}).find(id => id !== this.userId) || roomData.createdBy;
+        console.log('Found remote ID:', remoteId, 'current user ID:', this.userId);
+        
+        if (remoteId && remoteId !== this.userId) {
+          this.remoteUserId = remoteId;
+          console.log('Remote user ID set:', this.remoteUserId);
+          
+          // Set up real-time listeners for remote user info
+          const remoteUserRef = ref(rtdb, `users/${remoteId}`);
+          const remotePresenceRef = ref(rtdb, `presence/${remoteId}`);
+          
+          // Create a function to update remote user info
+          const updateRemoteUserInfo = async () => {
+            if (!this.onRemoteUserInfoCallback) {
+              console.log('No remote user info callback set');
+              return;
+            }
+            
+            try {
+              console.log('Fetching remote user info...');
+              const [userSnapshot, presenceSnapshot] = await Promise.all([
+                get(remoteUserRef),
+                get(remotePresenceRef)
+              ]);
+              
+              if (!userSnapshot.exists()) {
+                console.log('No user data found for:', remoteId);
+                return;
+              }
+
+              const userData = userSnapshot.val();
+              const presenceData = presenceSnapshot.exists() ? presenceSnapshot.val() : null;
+              console.log('Raw remote user data:', userData);
+              console.log('Raw remote presence data:', presenceData);
+
+              // Get the email from the correct location, prioritizing presence data
+              const userEmail = presenceData?.email || userData.email;
+              console.log('Remote user email:', userEmail);
+
+              // Ensure all required fields are properly structured
+              const info: RemoteUserInfo = {
+                profile: {
+                  displayName: userData.profile?.displayName || userData.displayName || userData.email?.split('@')[0] || 'Random User',
+                  bio: userData.profile?.bio || userData.bio || '',
+                  avatarSeed: userData.profile?.avatarSeed || userData.avatarSeed || remoteId
+                },
+                stats: {
+                  level: userData.stats?.level || 1,
+                  xp: userData.stats?.xp || 0,
+                  totalCalls: userData.stats?.totalCalls || 0,
+                  totalMessages: userData.stats?.totalMessages || 0
+                },
+                roles: {
+                  admin: isAdminUser(userEmail),
+                  dev: userEmail === "sukunadew@gmail.com"
+                }
+              };
+
+              console.log('Processed remote user info:', info);
+              this.onRemoteUserInfoCallback(info);
+            } catch (error) {
+              console.error('Error updating remote user info:', error);
+            }
+          };
+          
+          // Set up real-time listener with error handling and immediate update
+          console.log('Setting up remote user info listener');
+          onValue(remoteUserRef, 
+            (snapshot) => {
+              if (snapshot.exists()) {
+                console.log('Remote user data updated, triggering info update');
+                updateRemoteUserInfo();
+              }
+            },
+            (error) => {
+              console.error('Error in remote user listener:', error);
+            }
+          );
+
+          // Also listen for presence changes
+          onValue(remotePresenceRef,
+            (snapshot) => {
+              if (snapshot.exists()) {
+                console.log('Remote presence data updated, triggering info update');
+                updateRemoteUserInfo();
+              }
+            },
+            (error) => {
+              console.error('Error in remote presence listener:', error);
+            }
+          );
+          
+          // Initial fetch
+          console.log('Performing initial remote user info fetch');
+          await updateRemoteUserInfo();
+        } else {
+          console.log('No valid remote user ID found');
+        }
+      } else {
+        console.log('Room does not exist:', roomId);
+      }
+
       // Mark room as unavailable
       await set(ref(rtdb, `rooms/${roomId}/available`), false);
       await set(ref(rtdb, `rooms/${roomId}/lastActive`), Date.now());
+      
+      // Add participant to room
+      await set(ref(rtdb, `rooms/${roomId}/participants/${this.userId}`), true);
 
       // Create and send offer
       const offer = await this.peerConnection!.createOffer({
@@ -365,7 +751,6 @@ export class WebRTCService {
       this.setupIceCandidateListener(roomId);
       
       // Set up room cleanup
-      const roomRef = ref(rtdb, `rooms/${roomId}`);
       onValue(roomRef, (snapshot) => {
         if (!snapshot.exists()) {
           console.log('Room was deleted, cleaning up connection');
@@ -557,12 +942,16 @@ export class WebRTCService {
     }
   }
 
-  onRemoteStream(callback: (stream: MediaStream) => void) {
+  onRemoteStream(callback: (stream: MediaStream, userId: string) => void) {
     this.onRemoteStreamCallback = callback;
   }
 
   onConnectionStateChange(callback: (state: RTCPeerConnectionState) => void) {
     this.onConnectionStateChangeCallback = callback;
+  }
+
+  onRemoteUserInfo(callback: (info: RemoteUserInfo) => void) {
+    this.onRemoteUserInfoCallback = callback;
   }
 
   private listenToJoiners() {
@@ -627,7 +1016,10 @@ export class WebRTCService {
         connectionState: state,
         iceConnectionState: iceState,
         signalingState: signalingState,
-        attempt: connectionAttempts + 1
+        attempt: connectionAttempts + 1,
+        hasLocalDescription: !!this.peerConnection.localDescription,
+        hasRemoteDescription: !!this.peerConnection.remoteDescription,
+        roomId: this._roomId
       });
 
       if (state === 'connected') {
@@ -650,12 +1042,15 @@ export class WebRTCService {
             return;
           }
 
-            const room = snapshot.val() as Room;
+          const room = snapshot.val() as Room;
           console.log('Room state during connection:', {
             hasOffer: !!room.offer,
             hasAnswer: !!room.answer,
             available: room.available,
-            age: Date.now() - room.createdAt
+            age: Date.now() - room.createdAt,
+            participants: room.participants ? Object.keys(room.participants).length : 0,
+            createdBy: room.createdBy,
+            currentUserId: this.userId
           });
 
           // If we've tried too many times or the connection is taking too long
@@ -665,8 +1060,8 @@ export class WebRTCService {
               maxAttempts,
               age: Date.now() - room.createdAt
             });
-              this.handleConnectionTimeout();
-              clearInterval(checkInterval);
+            this.handleConnectionTimeout();
+            clearInterval(checkInterval);
           } else if (iceState === 'failed') {
             console.log('ICE connection failed, attempting restart');
             this.peerConnection?.restartIce();
@@ -724,7 +1119,7 @@ export class WebRTCService {
       
       if (snapshot.exists()) {
         const rooms = snapshot.val() as { [key: string]: Room };
-        const staleThreshold = Date.now() - 15000; // Reduced to 15 seconds threshold
+        const staleThreshold = Date.now() - 30000; // Increased to 30 seconds threshold
         
         for (const [roomId, room] of Object.entries(rooms)) {
           // A room is stale if any of these conditions are met:
@@ -732,7 +1127,7 @@ export class WebRTCService {
             (room.lastActive && room.lastActive < staleThreshold) || // No activity
             (room.available && room.createdAt < staleThreshold) || // Old available room
             (!room.offer && room.createdAt < staleThreshold) || // No offer after creation
-            (!room.answer && room.offer && Date.now() - room.createdAt > 20000) || // No answer after offer
+            (!room.answer && room.offer && Date.now() - room.createdAt > 40000) || // No answer after offer (increased timeout)
             (!room.available && !room.offer && !room.answer) // Invalid state
           ) {
             console.log('Cleaning up stale room:', roomId, {
@@ -741,7 +1136,8 @@ export class WebRTCService {
               createdAt: room.createdAt,
               hasOffer: !!room.offer,
               hasAnswer: !!room.answer,
-              available: room.available
+              available: room.available,
+              age: Date.now() - room.createdAt
             });
             await remove(ref(rtdb, `rooms/${roomId}`));
           }

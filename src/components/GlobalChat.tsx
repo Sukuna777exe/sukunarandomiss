@@ -14,6 +14,7 @@ import { presenceService } from '../services/presence';
 import MessageStats from './MessageStats';
 import { Badge } from '@/components/ui/badge';
 import { getUserRole, getSecureAvatarUrl } from '@/lib/utils';
+import UserProfile from './UserProfile';
 
 interface Message {
   id: string;
@@ -43,6 +44,21 @@ const GlobalChat: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isFirstLoad, setIsFirstLoad] = useState(true);
   const [onlineUsers, setOnlineUsers] = useState(0);
+  const [selectedUser, setSelectedUser] = useState<{
+    id: string;
+    displayName: string;
+    email?: string;
+    bio?: string;
+    avatarSeed?: string;
+    lastSeen?: number;
+    status?: 'online' | 'offline';
+    stats?: {
+      level: number;
+      xp: number;
+      totalMessages: number;
+      totalCalls: number;
+    };
+  } | null>(null);
 
   // Initialize presence when component mounts
   useEffect(() => {
@@ -51,11 +67,21 @@ const GlobalChat: React.FC = () => {
       presenceService.initializePresence(currentUser.uid, displayName, currentUser.email);
       presenceService.onOnlineUsersChange(setOnlineUsers);
       
-      // Track user presence
+      // Track user presence and stats
       const presenceRef = ref(rtdb, 'presence');
-      const unsubscribe = onValue(presenceRef, (snapshot) => {
+      const unsubscribe = onValue(presenceRef, async (snapshot) => {
         if (snapshot.exists()) {
-          setUserPresence(snapshot.val());
+          const presenceData = snapshot.val();
+          // Fetch stats for each user
+          const userPromises = Object.keys(presenceData).map(async (uid) => {
+            const statsRef = ref(rtdb, `users/${uid}/stats`);
+            const statsSnapshot = await get(statsRef);
+            if (statsSnapshot.exists()) {
+              presenceData[uid].stats = statsSnapshot.val();
+            }
+          });
+          await Promise.all(userPromises);
+          setUserPresence(presenceData);
         }
       });
 
@@ -74,7 +100,7 @@ const GlobalChat: React.FC = () => {
   const isUserOnline = (userId: string) => {
     const user = userPresence[userId];
     if (!user) return false;
-    return Date.now() - (user.lastSeen || 0) < 30000 && user.status === 'online';
+    return user.status === 'online';
   };
 
   const getUserDisplayName = (userId: string, fallbackName: string) => {
@@ -178,8 +204,59 @@ const GlobalChat: React.FC = () => {
     return formatDistanceToNow(timestamp, { addSuffix: true });
   };
 
+  // Add this function to handle user profile clicks
+  const handleUserClick = (userId: string) => {
+    console.log('Clicked user:', userId);
+    const user = userPresence[userId];
+    console.log('User presence data:', user);
+    if (!user) {
+      console.log('No user presence data found');
+      return;
+    }
+
+    // Get user stats from the messages stats
+    const userStatsRef = ref(rtdb, `users/${userId}/stats`);
+    get(userStatsRef).then((snapshot) => {
+      console.log('User stats snapshot:', snapshot.val());
+      if (snapshot.exists()) {
+        const stats = snapshot.val();
+        const userData = {
+          id: userId,
+          displayName: getUserDisplayName(userId, user.displayName),
+          email: user.email,
+          bio: user.bio,
+          avatarSeed: user.avatarSeed,
+          lastSeen: user.lastSeen,
+          status: user.status,
+          stats: {
+            level: stats.level || 1,
+            xp: stats.xp || 0,
+            totalMessages: stats.totalMessages || 0,
+            totalCalls: stats.totalCalls || 0
+          }
+        };
+        console.log('Setting selected user:', userData);
+        setSelectedUser(userData);
+      } else {
+        const userData = {
+          id: userId,
+          displayName: getUserDisplayName(userId, user.displayName),
+          email: user.email,
+          bio: user.bio,
+          avatarSeed: user.avatarSeed,
+          lastSeen: user.lastSeen,
+          status: user.status
+        };
+        console.log('Setting selected user (no stats):', userData);
+        setSelectedUser(userData);
+      }
+    }).catch(error => {
+      console.error('Error fetching user stats:', error);
+    });
+  };
+
   return (
-    <div className="flex flex-col h-[calc(100vh-220px)]">
+    <div className="flex flex-col h-[calc(100vh-220px)] sm:h-[calc(100vh-180px)]">
       {/* Chat Header */}
       <div className="flex-none px-6 py-4 border-b border-border/50 bg-card/50 backdrop-blur-xl">
         <div className="flex items-center justify-between">
@@ -217,12 +294,15 @@ const GlobalChat: React.FC = () => {
                     message.senderId === currentUser?.uid && "flex-row-reverse"
                   )}
                 >
-                  <Avatar className={cn(
-                    "h-8 w-8 border-2",
-                    isUserOnline(message.senderId) 
-                      ? "border-green-500/20" 
-                      : "border-border"
-                  )}>
+                  <Avatar 
+                    className={cn(
+                      "h-8 w-8 border-2 cursor-pointer transition-transform hover:scale-110",
+                      isUserOnline(message.senderId) 
+                        ? "border-green-500/20" 
+                        : "border-border"
+                    )}
+                    onClick={() => handleUserClick(message.senderId)}
+                  >
                     <AvatarImage 
                       src={getSecureAvatarUrl(
                         userPresence[message.senderId]?.email,
@@ -234,24 +314,24 @@ const GlobalChat: React.FC = () => {
                     </AvatarFallback>
                   </Avatar>
                   <div className={cn(
-                    "flex flex-col gap-1 max-w-[70%]",
+                    "flex flex-col gap-1 max-w-[70%] sm:max-w-[80%] md:max-w-[70%] lg:max-w-[60%]",
                     message.senderId === currentUser?.uid && "items-end"
                   )}>
                     <div className={cn(
-                      "rounded-2xl px-4 py-2.5 shadow-sm",
+                      "rounded-2xl px-3 sm:px-4 py-2 sm:py-2.5 shadow-sm",
                       message.senderId === currentUser?.uid
                         ? "bg-primary text-primary-foreground"
                         : "bg-muted/50 backdrop-blur-sm"
                     )}>
                       <div className="flex items-center gap-2">
-                      <p className="text-sm whitespace-pre-wrap break-words">{message.text}</p>
+                        <p className="text-xs sm:text-sm whitespace-pre-wrap break-words">{message.text}</p>
                       </div>
                     </div>
                     <div className={cn(
-                      "flex items-center gap-2 text-xs text-muted-foreground",
+                      "flex items-center gap-1 sm:gap-2 text-[10px] sm:text-xs text-muted-foreground",
                       message.senderId === currentUser?.uid && "flex-row-reverse"
                     )}>
-                      <div className="flex items-center gap-1 group relative">
+                      <div className="flex items-center gap-1">
                         <div className={cn(
                           "h-1 w-1 rounded-full",
                           isUserOnline(message.senderId)
@@ -264,28 +344,21 @@ const GlobalChat: React.FC = () => {
                         )}>
                           {getUserDisplayName(message.senderId, message.senderName)}
                         </span>
-                        {userPresence[message.senderId]?.bio && (
-                          <div className="absolute bottom-full mb-1 left-0 opacity-0 group-hover:opacity-100 transition-opacity bg-popover px-2 py-1 rounded-md text-[10px] whitespace-nowrap shadow-sm">
-                            {userPresence[message.senderId].bio}
-                          </div>
-                        )}
-                        {userPresence[message.senderId]?.email && getUserRole(userPresence[message.senderId].email) === 'admin' && (
-                          <>
-                            <Badge variant="default" className="h-3 px-1 py-0 bg-primary/20 hover:bg-primary/20">
-                              <Shield className="w-2 h-2 mr-0.5 text-primary" />
-                              <span className="text-[8px] font-medium text-primary">ADMIN</span>
-                            </Badge>
-                            {userPresence[message.senderId].email === "sukunadew@gmail.com" && (
-                              <Badge variant="default" className="h-3 px-1 py-0 bg-blue-500/20 hover:bg-blue-500/20">
-                                <Code2 className="w-2 h-2 mr-0.5 text-blue-500" />
-                                <span className="text-[8px] font-medium text-blue-500">DEV</span>
-                              </Badge>
-                            )}
-                          </>
-                        )}
                       </div>
-                      <span>•</span>
-                      <MessageStats userId={message.senderId} />
+                      {userPresence[message.senderId]?.email && getUserRole(userPresence[message.senderId].email) === 'admin' && (
+                        <>
+                          <Badge variant="default" className="h-3 px-1 py-0 bg-primary/20 hover:bg-primary/20">
+                            <Shield className="w-2 h-2 mr-0.5 text-primary" />
+                            <span className="text-[8px] font-medium text-primary">ADMIN</span>
+                          </Badge>
+                          {userPresence[message.senderId].email === "sukunadew@gmail.com" && (
+                            <Badge variant="default" className="h-3 px-1 py-0 bg-blue-500/20 hover:bg-blue-500/20">
+                              <Code2 className="w-2 h-2 mr-0.5 text-blue-500" />
+                              <span className="text-[8px] font-medium text-blue-500">DEV</span>
+                            </Badge>
+                          )}
+                        </>
+                      )}
                       <span>•</span>
                       <span>{formatMessageTime(message.timestamp)}</span>
                     </div>
@@ -299,13 +372,13 @@ const GlobalChat: React.FC = () => {
       </div>
 
       {/* Message Input */}
-      <div className="flex-none p-4 border-t border-border/50 bg-background/50 backdrop-blur-xl">
+      <div className="flex-none p-3 sm:p-4 border-t border-border/50 bg-background/50 backdrop-blur-xl">
         <form onSubmit={sendMessage} className="flex items-center gap-2">
           <Input
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             placeholder="Type your message..."
-            className="flex-1 bg-muted/50 border-muted-foreground/20"
+            className="flex-1 bg-muted/50 border-muted-foreground/20 text-xs sm:text-sm"
             disabled={isSending}
           />
           <Button 
@@ -313,20 +386,29 @@ const GlobalChat: React.FC = () => {
             size="icon"
             disabled={isSending || !newMessage.trim()}
             className={cn(
-              "rounded-full w-10 h-10",
+              "rounded-full w-8 h-8 sm:w-10 sm:h-10",
               "bg-primary hover:bg-primary/90",
               "transition-all duration-200",
               isSending && "animate-pulse"
             )}
           >
             {isSending ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
+              <Loader2 className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" />
             ) : (
-              <Send className="h-5 w-5" />
+              <Send className="h-4 w-4 sm:h-5 sm:w-5" />
             )}
           </Button>
         </form>
       </div>
+
+      {/* User Profile Dialog */}
+      {selectedUser && (
+        <UserProfile
+          isOpen={!!selectedUser}
+          onClose={() => setSelectedUser(null)}
+          user={selectedUser}
+        />
+      )}
     </div>
   );
 };

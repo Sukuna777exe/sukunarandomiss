@@ -81,10 +81,10 @@ const Navbar = () => {
         }
       });
 
-      return () => {
-        presenceService.cleanup();
+    return () => {
+      presenceService.cleanup();
         off(userProfileRef);
-      };
+    };
     }
   }, [currentUser]);
 
@@ -174,7 +174,7 @@ const Navbar = () => {
             <div className="hidden sm:flex items-center space-x-2">
               <NavLinks />
             </div>
-
+            
             {/* User Info and Logout */}
             <div className="hidden sm:flex items-center space-x-3">
               <UserProfileDialog>
@@ -190,7 +190,7 @@ const Navbar = () => {
                     <div className="flex flex-col">
                       <span className="text-sm font-medium leading-none">
                         {userProfile.displayName}
-                      </span>
+              </span>
                       <div className="flex items-center gap-1 mt-0.5">
                         {getUserRole(currentUser.email) === 'admin' && (
                           <>
@@ -257,7 +257,7 @@ const Navbar = () => {
                           <div className="flex flex-col">
                             <span className="font-medium">
                               {userProfile.displayName}
-                            </span>
+                    </span>
                             <div className="flex items-center gap-1 mt-1">
                               {getUserRole(currentUser.email) === 'admin' && (
                                 <>
@@ -276,7 +276,7 @@ const Navbar = () => {
                             </div>
                           </div>
                           <Settings className="h-4 w-4 text-muted-foreground ml-auto" />
-                        </div>
+                  </div>
                       </UserProfileDialog>
                     </SheetDescription>
                   </SheetHeader>

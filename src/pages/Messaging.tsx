@@ -114,49 +114,49 @@ const Messaging = () => {
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background/50 to-background">
       <Navbar />
       
-      <div className="flex-1 container mx-auto px-4 py-4">
+      <div className="flex-1 container mx-auto px-2 sm:px-4 py-2 sm:py-4">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="mb-3"
+          className="mb-2 sm:mb-3"
         >
-          <h1 className="text-xl font-bold bg-gradient-to-r from-primary via-accent to-primary bg-clip-text text-transparent">
+          <h1 className="text-lg sm:text-xl font-bold bg-gradient-to-r from-primary via-accent to-primary bg-clip-text text-transparent">
             Chat Rooms
           </h1>
           <p className="text-xs text-muted-foreground mt-0.5">Connect and chat with people from around the world</p>
         </motion.div>
         
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2 sm:gap-3">
           <motion.div 
-            className="md:col-span-1 space-y-3"
+            className="md:col-span-1 space-y-2 sm:space-y-3"
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.5, delay: 0.2 }}
           >
-            <OnlineUsers compact maxHeight={150} />
+            <OnlineUsers compact maxHeight={120} />
             
-            <div className="h-[180px] rounded-xl bg-card/50 backdrop-blur-xl border border-border/50 shadow-xl">
-              <div className="py-1.5 px-2.5 border-b border-border/50">
+            <div className="h-[160px] sm:h-[180px] rounded-xl bg-card/50 backdrop-blur-xl border border-border/50 shadow-xl">
+              <div className="py-1 sm:py-1.5 px-2 sm:px-2.5 border-b border-border/50">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center text-xs font-medium">
-                    <MessageCircle className="mr-1 h-3.5 w-3.5" />
+                  <div className="flex items-center text-[10px] sm:text-xs font-medium">
+                    <MessageCircle className="mr-1 h-3 sm:h-3.5 w-3 sm:w-3.5" />
                     Available Rooms
                   </div>
-                  <div className="flex items-center gap-1 text-[10px]">
+                  <div className="flex items-center gap-1 text-[9px] sm:text-[10px]">
                     <div className="h-1 w-1 rounded-full bg-green-500 animate-pulse" />
                     <span className="text-muted-foreground">{onlineUsers} online</span>
                   </div>
                 </div>
               </div>
               
-              <ScrollArea className="h-[calc(100%-28px)] px-1.5 py-1">
+              <ScrollArea className="h-[calc(100%-24px)] sm:h-[calc(100%-28px)] px-1 sm:px-1.5 py-1">
                 <div className="space-y-1">
                   {chatRooms.map((room) => (
                     <motion.div 
                       key={room.id}
                       className={cn(
-                        "relative rounded-lg p-1.5",
+                        "relative rounded-lg p-1 sm:p-1.5",
                         selectedRoom === room.id ? "bg-accent" : "hover:bg-accent/50",
                         room.status === 'active' ? "cursor-pointer" : "cursor-not-allowed opacity-70",
                         "transition-all duration-200"

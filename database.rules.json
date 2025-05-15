@@ -186,6 +186,44 @@
           ".validate": "newData.isNumber() && newData.val() >= 0"
         }
       }
+    },
+
+    "chats": {
+      "$roomId": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        "messages": {
+          "$messageId": {
+            ".validate": "newData.hasChildren(['text', 'senderId', 'senderName', 'timestamp'])",
+            "text": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 1000"
+            },
+            "senderId": {
+              ".validate": "newData.val() === auth.uid"
+            },
+            "senderName": {
+              ".validate": "newData.isString() && newData.val().length > 0"
+            },
+            "timestamp": {
+              ".validate": "newData.isNumber() && newData.val() <= now"
+            },
+            "type": {
+              ".validate": "!newData.exists() || (newData.isString() && newData.val() === 'text')"
+            }
+          }
+        },
+        "typing": {
+          "$userId": {
+            ".validate": "auth != null && $userId === auth.uid",
+            "name": {
+              ".validate": "newData.isString()"
+            },
+            "timestamp": {
+              ".validate": "newData.isNumber() && newData.val() <= now"
+            }
+          }
+        }
+      }
     }
   }
 }

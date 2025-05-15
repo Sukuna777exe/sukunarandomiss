@@ -8,6 +8,13 @@ interface UserPresence {
   email?: string;
   bio?: string;
   avatarSeed?: string;
+  stats: {
+    level: number;
+    xp: number;
+    totalCalls: number;
+    totalMessages: number;
+    uniqueConnections: number;
+  };
 }
 
 class PresenceService {
@@ -44,10 +51,15 @@ class PresenceService {
     console.log('Initializing presence with email:', email); // Debug log
     this.userRef = ref(rtdb, `presence/${userId}`);
 
-    // Get existing profile data
+    // Get existing profile data and user data
     try {
-      const profileRef = ref(rtdb, `users/${userId}/profile`);
-      const profileSnapshot = await get(profileRef);
+      const [profileSnapshot, userSnapshot, statsSnapshot] = await Promise.all([
+        get(ref(rtdb, `users/${userId}/profile`)),
+        get(ref(rtdb, `users/${userId}`)),
+        get(ref(rtdb, `users/${userId}/stats`))
+      ]);
+
+      // Get profile data
       if (profileSnapshot.exists()) {
         const profileData = profileSnapshot.val();
         this.currentProfile = {
@@ -56,25 +68,36 @@ class PresenceService {
         };
       }
 
-      // Get existing user data to preserve display name and email
-      const snapshot = await get(this.userRef);
-      if (snapshot.exists()) {
-        const existingData = snapshot.val();
-        if (existingData?.displayName) {
-          this.currentDisplayName = existingData.displayName;
-        }
-        // Ensure we always use the most recent email
-        this.currentEmail = email || existingData?.email || null;
+      // Get user data including email
+      if (userSnapshot.exists()) {
+        const userData = userSnapshot.val();
+        // Use the most recent email, prioritizing the passed email
+        this.currentEmail = email || userData.email || null;
+        console.log('Retrieved user email:', this.currentEmail); // Debug log
+      }
+
+      // Get stats data
+      let stats = {
+        level: 1,
+        xp: 0,
+        totalCalls: 0,
+        totalMessages: 0,
+        uniqueConnections: 0
+      };
+      
+      if (statsSnapshot.exists()) {
+        stats = statsSnapshot.val();
       }
 
       // Set initial presence with current display name and profile data
       const presenceData: UserPresence = {
         displayName: this.currentDisplayName,
-        email: this.currentEmail, // Make sure email is included
+        email: this.currentEmail,
         bio: this.currentProfile.bio,
         avatarSeed: this.currentProfile.avatarSeed,
         lastSeen: serverTimestamp(),
-        status: 'offline' as const
+        status: 'offline' as const,
+        stats: stats
       };
       console.log('Setting initial presence data:', presenceData); // Debug log
       await this.setPresenceData(presenceData);
@@ -95,11 +118,12 @@ class PresenceService {
         this.disconnectHandler = onDisconnect(this.userRef);
         await this.disconnectHandler.set({
           displayName: this.currentDisplayName,
-          email: this.currentEmail, // Include email in disconnect handler
+          email: this.currentEmail,
           bio: this.currentProfile.bio,
           avatarSeed: this.currentProfile.avatarSeed,
           lastSeen: serverTimestamp(),
-          status: 'offline'
+          status: 'offline',
+          stats: stats
         });
 
         // Set online status
@@ -109,30 +133,39 @@ class PresenceService {
           bio: this.currentProfile.bio,
           avatarSeed: this.currentProfile.avatarSeed,
           lastSeen: serverTimestamp(),
-          status: 'online'
+          status: 'online',
+          stats: stats
         });
       });
 
       // Start heartbeat
       this.startHeartbeat();
 
-      // Listen for profile changes and store the listener reference
-      this.profileListener = onValue(profileRef, (snapshot) => {
+      // Listen for profile, user data, and stats changes
+      this.profileListener = onValue(ref(rtdb, `users/${userId}`), async (snapshot) => {
         if (snapshot.exists()) {
-          const profileData = snapshot.val();
-          this.currentDisplayName = profileData.displayName || this.currentDisplayName;
+          const userData = snapshot.val();
+          this.currentDisplayName = userData.profile?.displayName || this.currentDisplayName;
+          this.currentEmail = email || userData.email || this.currentEmail;
           this.currentProfile = {
-            bio: profileData.bio || '',
-            avatarSeed: profileData.avatarSeed || userId
+            bio: userData.profile?.bio || '',
+            avatarSeed: userData.profile?.avatarSeed || userId
           };
-          // Update presence with new profile data
-          this.setPresenceData({
+
+          // Get latest stats
+          const statsRef = ref(rtdb, `users/${userId}/stats`);
+          const statsSnapshot = await get(statsRef);
+          const currentStats = statsSnapshot.exists() ? statsSnapshot.val() : stats;
+
+          // Update presence with new data
+          await this.setPresenceData({
             displayName: this.currentDisplayName,
             email: this.currentEmail,
             bio: this.currentProfile.bio,
             avatarSeed: this.currentProfile.avatarSeed,
             lastSeen: serverTimestamp(),
-            status: 'online'
+            status: 'online',
+            stats: currentStats
           });
         }
       });
@@ -152,7 +185,14 @@ class PresenceService {
         bio: this.currentProfile.bio,
         avatarSeed: this.currentProfile.avatarSeed,
         lastSeen: serverTimestamp(),
-        status: 'offline'
+        status: 'offline',
+        stats: {
+          level: 1,
+          xp: 0,
+          totalCalls: 0,
+          totalMessages: 0,
+          uniqueConnections: 0
+        }
       });
     } catch (error) {
       console.error('Error setting offline status:', error);
@@ -172,7 +212,14 @@ class PresenceService {
           bio: this.currentProfile.bio,
           avatarSeed: this.currentProfile.avatarSeed,
           lastSeen: serverTimestamp(),
-          status: 'online'
+          status: 'online',
+          stats: {
+            level: 1,
+            xp: 0,
+            totalCalls: 0,
+            totalMessages: 0,
+            uniqueConnections: 0
+          }
         });
       }
     }, 15000);
@@ -204,11 +251,9 @@ class PresenceService {
         return;
       }
 
-      const now = Date.now();
       const users = snapshot.val();
       const onlineCount = Object.values(users).filter((user: any) => {
-        const timeDiff = now - (user.lastSeen || 0);
-        return timeDiff < 30000 && user.status === 'online' && user.displayName;
+        return user.status === 'online' && user.displayName;
       }).length;
 
       callback(onlineCount);

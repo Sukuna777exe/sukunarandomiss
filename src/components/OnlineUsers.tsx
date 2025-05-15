@@ -46,10 +46,9 @@ const OnlineUsers: React.FC<OnlineUsersProps> = ({
 
   const updateUserStatuses = useCallback(() => {
     setUsers(prevUsers => {
-      const now = Date.now();
       return prevUsers.map(user => ({
         ...user,
-        status: now - user.lastSeen < 30000 ? 'online' : 'offline'
+        status: user.status
       }));
     });
   }, []);
@@ -60,17 +59,16 @@ const OnlineUsers: React.FC<OnlineUsersProps> = ({
     const unsubscribe = onValue(usersRef, (snapshot) => {
       if (snapshot.exists()) {
         const usersData = snapshot.val();
-        const now = Date.now();
 
         // Create initial users list without stats
         const usersList = Object.entries(usersData).map(([id, data]: [string, any]) => ({
           id,
           displayName: data.displayName || 'Anonymous',
-          lastSeen: data.lastSeen || now,
-          status: now - (data.lastSeen || 0) < 30000 ? 'online' as const : 'offline' as const,
-          email: data.email, // Add email to user data
-          bio: data.bio, // Add bio to user data
-          avatarSeed: data.avatarSeed // Add avatarSeed to user data
+          lastSeen: data.lastSeen || Date.now(),
+          status: data.status || 'offline',
+          email: data.email,
+          bio: data.bio,
+          avatarSeed: data.avatarSeed
         }));
 
         // Update users immediately with basic info
